@@ -1,0 +1,5 @@
+.venv/
+.git/
+__pycache__/
+test_app.py
+requirements-dev.txt
