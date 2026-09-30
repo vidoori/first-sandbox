@@ -28,6 +28,35 @@ jobs:
       - name: Run tests
         run: pytest -v --junitxml=test-results.xml
 
+      - name: Test summary
+        if: always()
+        run: |
+          python - <<'PY'
+          import os
+          import xml.etree.ElementTree as ET
+
+          out = open(os.environ["GITHUB_STEP_SUMMARY"], "a")
+          if not os.path.exists("test-results.xml"):
+              out.write("## Test results\n\nNo results file - pytest did not run.\n")
+              raise SystemExit
+
+          passed = failed = 0
+          rows = []
+          for tc in ET.parse("test-results.xml").getroot().iter("testcase"):
+              problem = tc.find("failure") if tc.find("failure") is not None else tc.find("error")
+              if problem is None:
+                  passed += 1
+                  rows.append(f"| ✅ | `{tc.get('name')}` | |")
+              else:
+                  failed += 1
+                  msg = (problem.get("message") or "").replace("|", "\\|").replace("\n", " ")[:200]
+                  rows.append(f"| ❌ | `{tc.get('name')}` | {msg} |")
+
+          out.write(f"## Test results: {passed} passed, {failed} failed\n\n")
+          out.write("| | Test | Message |\n|---|---|---|\n")
+          out.write("\n".join(rows) + "\n")
+          PY
+
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
