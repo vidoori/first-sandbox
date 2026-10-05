@@ -178,3 +178,52 @@ jobs:
                   out.write("| Level | Rule | Location |\n|---|---|---|\n")
                   out.write("\n".join(rows) + "\n")
           PY
+
+  secrets-gitleaks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Run Gitleaks
+        run: |
+          docker run --rm -v "$PWD:/repo" ghcr.io/gitleaks/gitleaks:v8.28.0 \
+            git /repo \
+            --report-format sarif \
+            --report-path /repo/gitleaks.sarif \
+            --redact \
+            --exit-code 1
+
+      - name: Upload Gitleaks results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: secrets-gitleaks
+          path: gitleaks.sarif
+          retention-days: 90
+
+      - name: Gitleaks summary
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import json, os
+
+          rows = []
+          if os.path.exists("gitleaks.sarif"):
+              for run in json.load(open("gitleaks.sarif"))["runs"]:
+                  for r in run.get("results", []):
+                      loc = r["locations"][0]["physicalLocation"]
+                      where = f'{loc["artifactLocation"]["uri"]}:{loc.get("region", {}).get("startLine", "?")}'
+                      rows.append(f'| `{r["ruleId"]}` | `{where}` |')
+
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as out:
+              if not os.path.exists("gitleaks.sarif"):
+                  out.write("## Secrets (Gitleaks): ❌ scan did not produce results\n")
+              else:
+                  icon = "✅" if not rows else "❌"
+                  out.write(f"## Secrets (Gitleaks): {icon} {len(rows)} findings\n\n")
+                  if rows:
+                      out.write("| Rule | Location |\n|---|---|\n")
+                      out.write("\n".join(rows) + "\n")
+          PY
