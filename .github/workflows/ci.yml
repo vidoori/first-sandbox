@@ -244,7 +244,8 @@ jobs:
           PY
 
   deps-pip-audit:
-    if: hashFiles('**/requirements*.txt') != ''
+    needs: detect
+    if: needs.detect.outputs.python == 'true'
     runs-on: ubuntu-latest
     env:
       ENFORCE: "false"   # set to "true" to make findings block the build
@@ -357,3 +358,24 @@ jobs:
           if rows:
               print(f"::warning::Trivy found {len(rows)} vulnerable dependencies (report-only)")
           PY
+
+  detect:
+    runs-on: ubuntu-latest
+    outputs:
+      python: ${{ steps.langs.outputs.python }}
+      dotnet: ${{ steps.langs.outputs.dotnet }}
+      java: ${{ steps.langs.outputs.java }}
+      node: ${{ steps.langs.outputs.node }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Detect languages
+        id: langs
+        run: |
+          has() { [ -n "$(find . -path ./.git -prune -o \( "$@" \) -print -quit)" ] && echo true || echo false; }
+          {
+            echo "python=$(has -name 'requirements*.txt' -o -name 'pyproject.toml')"
+            echo "dotnet=$(has -name '*.csproj' -o -name '*.sln')"
+            echo "java=$(has -name 'pom.xml' -o -name 'build.gradle*')"
+            echo "node=$(has -name 'package.json')"
+          } | tee -a "$GITHUB_OUTPUT"
