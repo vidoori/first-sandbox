@@ -379,3 +379,91 @@ jobs:
             echo "java=$(has -name 'pom.xml' -o -name 'build.gradle*')"
             echo "node=$(has -name 'package.json')"
           } | tee -a "$GITHUB_OUTPUT"
+
+  iac-trivy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Run Trivy misconfig scan
+        run: |
+          docker run --rm -v "$PWD:/src" aquasec/trivy:0.65.0 \
+            config /src \
+            --format json \
+            --output /src/trivy-iac.json
+
+      - name: Upload Trivy IaC results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: iac-trivy
+          path: trivy-iac.json
+          retention-days: 90
+
+      - name: Trivy IaC summary
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import json, os
+
+          rows = []
+          for res in json.load(open("trivy-iac.json")).get("Results", []):
+              for m in res.get("Misconfigurations") or []:
+                  if m.get("Status") == "FAIL":
+                      line = m.get("CauseMetadata", {}).get("StartLine", "?")
+                      rows.append(f'| {m["Severity"]} | `{m["ID"]}` | {m["Title"]} | `{res["Target"]}:{line}` |')
+
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as out:
+              out.write(f"## IaC (Trivy): ⚠️ {len(rows)} findings (report-only)\n\n")
+              if rows:
+                  out.write("| Severity | Check | Title | Location |\n|---|---|---|---|\n")
+                  out.write("\n".join(sorted(rows)) + "\n")
+          PY
+
+  iac-checkov:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install Checkov
+        run: pip install checkov && checkov --version
+
+      - name: Run Checkov
+        run: |
+          checkov -d . --soft-fail \
+            -o json --output-file-path checkov-results
+
+      - name: Upload Checkov results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: iac-checkov
+          path: checkov-results
+          retention-days: 90
+
+      - name: Checkov summary
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import json, os
+
+          data = json.load(open("checkov-results/results_json.json"))
+          reports = data if isinstance(data, list) else [data]
+
+          rows = []
+          for rep in reports:
+              for c in rep.get("results", {}).get("failed_checks", []):
+                  line = (c.get("file_line_range") or ["?"])[0]
+                  sev = c.get("severity") or "n/a"
+                  rows.append(f'| {sev} | `{c["check_id"]}` | {c["check_name"]} | `{c["file_path"].lstrip("/")}:{line}` |')
+
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as out:
+              out.write(f"## IaC (Checkov): ⚠️ {len(rows)} findings (report-only)\n\n")
+              if rows:
+                  out.write("| Severity | Check | Title | Location |\n|---|---|---|---|\n")
+                  out.write("\n".join(sorted(rows)) + "\n")
+          PY
