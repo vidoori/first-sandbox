@@ -122,3 +122,59 @@ jobs:
           cat >> "$GITHUB_STEP_SUMMARY" <<'MD'
           > ℹ️ **Learning note:** The "Docker Build summary" section below is generated automatically by `docker/build-push-action`, not by our workflow. To turn it off, add `DOCKER_BUILD_SUMMARY: false` and `DOCKER_BUILD_RECORD_UPLOAD: false` under `env:` on the build step.
           MD
+
+  sast-codeql:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: python
+          build-mode: none
+          queries: security-extended
+
+      - name: Run CodeQL analysis
+        uses: github/codeql-action/analyze@v4
+        with:
+          output: codeql-results
+
+      - name: Upload CodeQL results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sast-codeql
+          path: codeql-results
+          retention-days: 90
+
+      - name: CodeQL summary
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import glob, json, os
+          from collections import Counter
+
+          counts = Counter()
+          rows = []
+          for f in glob.glob("codeql-results/*.sarif"):
+              for run in json.load(open(f))["runs"]:
+                  for r in run.get("results", []):
+                      level = r.get("level", "warning")
+                      counts[level] += 1
+                      loc = r["locations"][0]["physicalLocation"]
+                      where = f'{loc["artifactLocation"]["uri"]}:{loc.get("region", {}).get("startLine", "?")}'
+                      rows.append(f'| {level} | `{r["ruleId"]}` | `{where}` |')
+
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as out:
+              total = sum(counts.values())
+              icon = "✅" if total == 0 else "⚠️"
+              out.write(f"## SAST (CodeQL): {icon} {total} findings\n\n")
+              if rows:
+                  out.write("| Level | Rule | Location |\n|---|---|---|\n")
+                  out.write("\n".join(rows) + "\n")
+          PY
