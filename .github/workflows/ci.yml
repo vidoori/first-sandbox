@@ -69,7 +69,8 @@ jobs:
           retention-days: 90
 
   build:
-    needs: [test, sast-codeql, secrets-gitleaks, deps-pip-audit]
+    needs: [test, sast-codeql, secrets-gitleaks, deps-pip-audit, deps-trivy]
+    if: ${{ !failure() && !cancelled() }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -243,6 +244,7 @@ jobs:
           PY
 
   deps-pip-audit:
+    if: hashFiles('**/requirements*.txt') != ''
     runs-on: ubuntu-latest
     env:
       ENFORCE: "false"   # set to "true" to make findings block the build
@@ -298,4 +300,60 @@ jobs:
               raise SystemExit(1)
           if rows:
               print(f"::warning::pip-audit found {len(rows)} vulnerable dependencies (report-only)")
+          PY
+
+  deps-trivy:
+    runs-on: ubuntu-latest
+    env:
+      ENFORCE: "false"   # set to "true" to make HIGH/CRITICAL findings block the build
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Run Trivy filesystem scan
+        run: |
+          docker run --rm -v "$PWD:/src" aquasec/trivy:0.65.0 \
+            fs /src \
+            --scanners vuln \
+            --format json \
+            --output /src/trivy-deps.json
+
+      - name: Upload Trivy results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deps-trivy
+          path: trivy-deps.json
+          retention-days: 90
+
+      - name: Trivy summary and gate
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import json, os
+
+          out = open(os.environ["GITHUB_STEP_SUMMARY"], "a")
+          if not os.path.exists("trivy-deps.json"):
+              out.write("## Dependencies (Trivy): ❌ scan did not produce results\n")
+              raise SystemExit(1)
+
+          rows, blocking = [], 0
+          for res in json.load(open("trivy-deps.json")).get("Results", []):
+              for v in res.get("Vulnerabilities") or []:
+                  if v["Severity"] in ("HIGH", "CRITICAL"):
+                      blocking += 1
+                  rows.append(f'| {v["Severity"]} | `{v["PkgName"]}` | {v["InstalledVersion"]} | {v["VulnerabilityID"]} | {v.get("FixedVersion") or "none"} | `{res["Target"]}` |')
+
+          enforce = os.environ["ENFORCE"] == "true"
+          icon = "✅" if not rows else ("❌" if enforce and blocking else "⚠️")
+          mode = "blocking on HIGH/CRITICAL" if enforce else "report-only"
+          out.write(f"## Dependencies (Trivy): {icon} {len(rows)} findings ({mode})\n\n")
+          if rows:
+              out.write("| Severity | Package | Version | Vulnerability | Fixed in | File |\n|---|---|---|---|---|---|\n")
+              out.write("\n".join(rows) + "\n")
+
+          if enforce and blocking:
+              print(f"::error::Trivy found {blocking} HIGH/CRITICAL vulnerable dependencies")
+              raise SystemExit(1)
+          if rows:
+              print(f"::warning::Trivy found {len(rows)} vulnerable dependencies (report-only)")
           PY
