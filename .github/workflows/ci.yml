@@ -179,6 +179,20 @@ jobs:
                   out.write("\n".join(rows) + "\n")
           PY
 
+      - name: CodeQL gate
+        run: |
+          python3 - <<'GATE'
+          import glob, json
+          errors = [r for f in glob.glob("codeql-results/*.sarif")
+                      for run in json.load(open(f))["runs"]
+                      for r in run.get("results", [])
+                      if r.get("level") == "error"]
+          if errors:
+              print(f"::error::CodeQL found {len(errors)} error-level findings")
+              raise SystemExit(1)
+          print("No error-level CodeQL findings")
+          GATE
+
   secrets-gitleaks:
     runs-on: ubuntu-latest
     steps:
