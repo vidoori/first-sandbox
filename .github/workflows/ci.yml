@@ -89,6 +89,12 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # LEARNING NOTE: build-push-action writes its own "Docker Build summary"
+      # section to the job summary and uploads a .dockerbuild record artifact.
+      # To turn those off, add this to the step:
+      #   env:
+      #     DOCKER_BUILD_SUMMARY: false
+      #     DOCKER_BUILD_RECORD_UPLOAD: false
       - name: Build (and push on main)
         id: build
         uses: docker/build-push-action@v6
@@ -111,4 +117,8 @@ jobs:
             else
               echo "✅ Built (not pushed - pull request)"
             fi
+            echo ""
           } >> "$GITHUB_STEP_SUMMARY"
+          cat >> "$GITHUB_STEP_SUMMARY" <<'MD'
+          > ℹ️ **Learning note:** The "Docker Build summary" section below is generated automatically by `docker/build-push-action`, not by our workflow. To turn it off, add `DOCKER_BUILD_SUMMARY: false` and `DOCKER_BUILD_RECORD_UPLOAD: false` under `env:` on the build step.
+          MD
