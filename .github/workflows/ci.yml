@@ -69,7 +69,7 @@ jobs:
           retention-days: 90
 
   build:
-    needs: test
+    needs: [test, sast-codeql, secrets-gitleaks]
     runs-on: ubuntu-latest
     permissions:
       contents: read
