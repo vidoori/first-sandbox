@@ -69,7 +69,7 @@ jobs:
           retention-days: 90
 
   build:
-    needs: [test, sast-codeql, secrets-gitleaks]
+    needs: [test, sast-codeql, secrets-gitleaks, deps-pip-audit]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -240,4 +240,62 @@ jobs:
                   if rows:
                       out.write("| Rule | Location |\n|---|---|\n")
                       out.write("\n".join(rows) + "\n")
+          PY
+
+  deps-pip-audit:
+    runs-on: ubuntu-latest
+    env:
+      ENFORCE: "false"   # set to "true" to make findings block the build
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+
+      - name: Install pip-audit
+        run: pip install pip-audit==2.9.0
+
+      - name: Run pip-audit
+        run: |
+          pip-audit -r requirements-dev.txt --format json --output pip-audit.json || true
+
+      - name: Upload pip-audit results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deps-pip-audit
+          path: pip-audit.json
+          retention-days: 90
+
+      - name: pip-audit summary and gate
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import json, os
+
+          out = open(os.environ["GITHUB_STEP_SUMMARY"], "a")
+          if not os.path.exists("pip-audit.json"):
+              out.write("## Dependencies (pip-audit): ❌ scan did not produce results\n")
+              raise SystemExit(1)
+
+          rows = []
+          for dep in json.load(open("pip-audit.json"))["dependencies"]:
+              for v in dep.get("vulns", []):
+                  fix = ", ".join(v.get("fix_versions", [])) or "none"
+                  rows.append(f'| `{dep["name"]}` | {dep["version"]} | {v["id"]} | {fix} |')
+
+          enforce = os.environ["ENFORCE"] == "true"
+          icon = "✅" if not rows else ("❌" if enforce else "⚠️")
+          mode = "blocking" if enforce else "report-only"
+          out.write(f"## Dependencies (pip-audit): {icon} {len(rows)} findings ({mode})\n\n")
+          if rows:
+              out.write("| Package | Version | Vulnerability | Fixed in |\n|---|---|---|---|\n")
+              out.write("\n".join(rows) + "\n")
+
+          if rows and enforce:
+              print(f"::error::pip-audit found {len(rows)} vulnerable dependencies")
+              raise SystemExit(1)
+          if rows:
+              print(f"::warning::pip-audit found {len(rows)} vulnerable dependencies (report-only)")
           PY
